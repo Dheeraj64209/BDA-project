@@ -1,0 +1,13 @@
+# The dataset is large and belongs to Kaggle, so it is never committed. Put your CSV in data/ locally.
+data/*
+!data/.gitkeep
+
+# Python / editor / OS leftovers
+__pycache__/
+*.pyc
+.venv/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log

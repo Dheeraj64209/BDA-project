@@ -1,0 +1,84 @@
+# Kafka -> HDFS -> MapReduce -> dashboard, all on one machine.
+#   docker compose up -d --build                 start everything
+#   docker compose run --rm producer             stream the Kaggle CSV in data/ into Kafka
+#   docker compose exec resourcemanager bash /opt/jobs/run_job.sh   run the MapReduce job
+#   http://localhost:8501                        dashboard
+
+name: return-rate
+
+services:
+  # ---------- Kafka (single broker, KRaft mode, no ZooKeeper) ----------
+  kafka:
+    image: apache/kafka:3.8.0
+    hostname: kafka
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+
+  # ---------- Hadoop: HDFS (namenode + datanode) and YARN (resourcemanager + nodemanager) ----------
+  # The official apache/hadoop image only exists for Intel/AMD (linux/amd64). "platform" makes that explicit, so on an
+  # Apple-silicon Mac (M1 or newer) Docker runs these four services through emulation instead of failing or guessing.
+  namenode:
+    image: apache/hadoop:3.4.1
+    platform: linux/amd64
+    hostname: namenode
+    command: ["hdfs", "namenode"]
+    ports: ["9870:9870"]          # HDFS web UI
+    env_file: hadoop.env
+    environment:
+      ENSURE_NAMENODE_DIR: /tmp/hadoop-hadoop/dfs/name   # format HDFS on first start only
+
+  datanode:
+    image: apache/hadoop:3.4.1
+    platform: linux/amd64
+    hostname: datanode
+    command: ["hdfs", "datanode"]
+    env_file: hadoop.env
+
+  resourcemanager:
+    build: ./mapreduce            # official Hadoop image + the compiled MapReduce job
+    image: return-rate-hadoop
+    platform: linux/amd64
+    hostname: resourcemanager
+    command: ["yarn", "resourcemanager"]
+    ports: ["8088:8088"]          # YARN web UI (job progress)
+    env_file: hadoop.env
+
+  nodemanager:
+    image: apache/hadoop:3.4.1
+    platform: linux/amd64
+    hostname: nodemanager
+    command: ["yarn", "nodemanager"]
+    env_file: hadoop.env
+
+  # ---------- Python apps ----------
+  consumer:                       # Kafka -> HDFS
+    build: .
+    image: return-rate-app
+    command: ["python", "consumer.py"]
+    depends_on: [kafka, namenode, datanode]
+    restart: unless-stopped
+
+  dashboard:                      # HDFS results -> web dashboard
+    build: .
+    image: return-rate-app
+    command: ["streamlit", "run", "dashboard.py", "--server.port=8501", "--server.address=0.0.0.0", "--server.headless=true"]
+    ports: ["8501:8501"]
+    depends_on: [namenode, datanode]
+
+  producer:                       # CSV -> Kafka, run on demand with "docker compose run --rm producer"
+    build: .
+    image: return-rate-app
+    command: ["python", "producer.py", "/data"]
+    volumes: ["./data:/data:ro"]
+    depends_on: [kafka]
+    profiles: ["tools"]

@@ -1,0 +1,2 @@
+# Keep the (large) dataset out of the image build; the producer reads it through a volume instead.
+data/

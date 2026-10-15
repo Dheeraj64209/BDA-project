@@ -1,0 +1,4 @@
+kafka-python==2.3.2
+hdfs==2.7.3
+streamlit==1.40.0
+pandas==2.2.3
